@@ -612,6 +612,48 @@ class SessionTest extends TestCase {
 		$this->assertTrue($userSession->logClientIn('john', 'I-AM-AN-APP-PASSWORD', $request, $this->throttler));
 	}
 
+	public function testLogClientInWithTokenPasswordDispatchesBeforeLoginOnce(): void {
+		$session = $this->createMock(ISession::class);
+		$request = $this->createMock(IRequest::class);
+		$request->method('getRemoteAddress')->willReturn('192.168.0.1');
+
+		$user = $this->createMock(IUser::class);
+		$user->method('getUID')->willReturn('john');
+		$user->method('isEnabled')->willReturn(true);
+		$this->manager->method('get')
+			->with('john')
+			->willReturn($user);
+
+		$token = new PublicKeyToken();
+		$token->setId(1);
+		$token->setUid('john');
+		$token->setLoginName('john');
+		$token->setType(IToken::PERMANENT_TOKEN);
+		$token->setLastCheck(10000);
+		$this->tokenProvider->method('getToken')
+			->with('I-AM-AN-APP-PASSWORD')
+			->willReturn($token);
+		$this->tokenProvider->method('getPassword')
+			->with($token, 'I-AM-AN-APP-PASSWORD')
+			->willReturn('secret');
+
+		$userSession = $this->getMockBuilder(Session::class)
+			->setConstructorArgs([$this->manager, $session, $this->timeFactory, $this->tokenProvider, $this->config, $this->random, $this->lockdownManager, $this->logger, $this->dispatcher])
+			->onlyMethods(['prepareUserLogin'])
+			->getMock();
+
+		$beforeLoginEvents = [];
+		$this->dispatcher->method('dispatchTyped')
+			->willReturnCallback(function (Event $event) use (&$beforeLoginEvents): void {
+				if ($event instanceof BeforeUserLoggedInEvent) {
+					$beforeLoginEvents[] = $event;
+				}
+			});
+
+		$this->assertTrue($userSession->logClientIn('john', 'I-AM-AN-APP-PASSWORD', $request, $this->throttler));
+		$this->assertEquals([new BeforeUserLoggedInEvent('john', 'secret')], $beforeLoginEvents);
+	}
+
 	public function testLogClientInNoTokenPasswordNo2fa(): void {
 		$this->expectException(PasswordLoginForbiddenException::class);
 
@@ -1566,19 +1608,9 @@ class SessionTest extends TestCase {
 			->method('registerAttempt')
 			->with('login', '192.168.0.1', ['user' => 'john']);
 		$this->dispatcher
-			->expects($this->exactly(2))
+			->expects($this->once())
 			->method('dispatchTyped')
-			->willReturnCallback(
-				function (Event $event): void {
-					if ($event instanceof LoginFailed) {
-						$this->assertEquals($event, new LoginFailed('john', 'I-AM-A-PASSWORD'));
-					} elseif ($event instanceof BeforeUserLoggedInEvent) {
-						$this->assertEquals($event, new BeforeUserLoggedInEvent('john', 'I-AM-A-PASSWORD'));
-					} else {
-						$this->fail('Unexpected event');
-					}
-				}
-			);
+			->with(new LoginFailed('john', 'I-AM-A-PASSWORD'));
 
 		$this->assertFalse($userSession->logClientIn('john', 'I-AM-A-PASSWORD', $request, $this->throttler));
 	}

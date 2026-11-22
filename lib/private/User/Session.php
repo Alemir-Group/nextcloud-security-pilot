@@ -413,8 +413,6 @@ class Session implements IUserSession, Emitter {
 		$remoteAddress = $request->getRemoteAddress();
 		$currentDelay = $throttler->sleepDelayOrThrowOnMax($remoteAddress, 'login');
 
-		$this->dispatcher->dispatchTyped(new BeforeUserLoggedInEvent($user, $password));
-
 		try {
 			$dbToken = $this->getTokenFromPassword($password);
 			$isTokenPassword = $dbToken !== null;
@@ -427,6 +425,11 @@ class Session implements IUserSession, Emitter {
 		} catch (ExpiredTokenException) {
 			// Just return on an expired token no need to check further or record a failed login
 			return false;
+		}
+
+		// Token logins dispatch this event in loginWithToken()
+		if (!$isTokenPassword) {
+			$this->dispatcher->dispatchTyped(new BeforeUserLoggedInEvent($user, $password));
 		}
 
 		if (!$isTokenPassword && ($this->isTokenAuthEnforced() || $this->isTwoFactorEnforced($user))) {
